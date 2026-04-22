@@ -521,10 +521,16 @@ elif st.session_state.fase == "resultado":
             nombre_perfil = st.text_input("¿Con qué nombre quieres guardar este perfil?",
                                             placeholder="Ej: Plan enero, Perfil atleta, etc.")
             if st.button("Guardar", disabled=not nombre_perfil):
-                guardar_perfil(user_id, nombre_perfil, st.session_state.respuestas,
-                            st.session_state.dieta_generada)
-                st.success(f"✅ Perfil '{nombre_perfil}' guardado correctamente.")
-
+                try:
+                    resultado = guardar_perfil(user_id, nombre_perfil, st.session_state.respuestas,
+                                st.session_state.dieta_generada)
+                    if resultado:
+                        st.success(f"✅ Perfil '{nombre_perfil}' guardado correctamente.")
+                    else:
+                        st.error("❌ No se pudo guardar. Revisa la consola.")
+                except Exception as e:
+                    st.error(f"❌ Error al guardar: {str(e)}")
+                    
         if st.button("🔄 Hacer un nuevo plan", use_container_width=True):
             st.session_state.respuestas = {}
             st.session_state.pregunta_actual = 0
