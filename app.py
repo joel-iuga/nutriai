@@ -4,28 +4,34 @@ from groq import Groq
 import os
 from dotenv import load_dotenv
 from supabase import create_client
-from preguntas import PREGUNTAS, obtener_preguntas_activas
-from base_datos import guardar_perfil, cargar_perfiles, cargar_perfil_por_id, eliminar_perfil
+from preguntas import obtener_preguntas_activas
+from base_datos import (
+    crear_persona, actualizar_persona, cargar_personas, eliminar_persona,
+    guardar_dieta, cargar_dietas, cargar_dieta_por_id, eliminar_dieta
+)
 from exportar_pdf import generar_pdf
 
 load_dotenv()
 
 st.set_page_config(
-    page_title="NutriAI — Dieta personalizada",
+    page_title="NutriAI",
     page_icon="🥗",
     layout="centered"
 )
 
-# ── Cliente Supabase ───────────────────────────────────────────────
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-# ── Estado de autenticación ────────────────────────────────────────
+# ── Estado global ──────────────────────────────────────────────────
 if "user" not in st.session_state:
     st.session_state.user = None
 if "auth_view" not in st.session_state:
-    st.session_state.auth_view = "login"  # "login" o "registro"
+    st.session_state.auth_view = "login"
+if "persona_activa" not in st.session_state:
+    st.session_state.persona_activa = None  # dict con datos de la persona
+if "vista" not in st.session_state:
+    st.session_state.vista = "perfiles"  # perfiles | nueva_persona | editar_persona | cuestionario | resultado
 
-# ── Pantalla de login/registro ─────────────────────────────────────
+# ── AUTENTICACIÓN ─────────────────────────────────────────────────
 if st.session_state.user is None:
     st.title("🥗 NutriAI")
     st.caption("Tu plan de alimentación personalizado con inteligencia artificial")
@@ -52,22 +58,14 @@ if st.session_state.user is None:
             if st.form_submit_button("Entrar", use_container_width=True, type="primary"):
                 try:
                     response = supabase.auth.sign_in_with_password({
-                        "email": email,
-                        "password": password
+                        "email": email, "password": password
                     })
                     st.session_state.user = response.user
                     st.rerun()
                 except Exception:
                     st.error("Email o contraseña incorrectos")
-
     else:
-        st.info("""
-        **La contraseña debe tener:**
-        - Mínimo 8 caracteres
-        - Al menos una letra mayúscula
-        - Al menos una letra minúscula
-        - Al menos un número
-        """)
+        st.info("La contraseña debe tener mínimo 8 caracteres, mayúscula, minúscula y número.")
         with st.form("form_registro"):
             nombre_reg = st.text_input("Nombre")
             email_reg = st.text_input("Email")
@@ -77,487 +75,450 @@ if st.session_state.user is None:
                 if password_reg != password_rep:
                     st.error("Las contraseñas no coinciden")
                 elif len(password_reg) < 8:
-                    st.error("La contraseña debe tener al menos 8 caracteres")
+                    st.error("Mínimo 8 caracteres")
                 else:
                     try:
-                        response = supabase.auth.sign_up({
+                        supabase.auth.sign_up({
                             "email": email_reg,
                             "password": password_reg,
                             "options": {"data": {"nombre": nombre_reg}}
                         })
-                        st.success("✅ Cuenta creada. Revisa tu email para confirmarla y luego inicia sesión.")
+                        st.success("✅ Cuenta creada. Revisa tu email y luego inicia sesión.")
                         st.session_state.auth_view = "login"
                     except Exception as e:
-                        st.error(f"Error al registrarse: {str(e)}")
-
+                        st.error(f"Error: {str(e)}")
     st.stop()
 
 # ── Usuario autenticado ────────────────────────────────────────────
 user_id = st.session_state.user.id
 nombre_real = st.session_state.user.user_metadata.get("nombre", st.session_state.user.email)
 
+# ── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
     st.write(f"👤 {nombre_real}")
-    if st.button("Cerrar sesión", use_container_width=True):
-        supabase.auth.sign_out()
-        st.session_state.user = None
-        st.session_state.respuestas = {}
-        st.session_state.pregunta_actual = 0
-        st.session_state.dieta_generada = None
-        st.session_state.fase = "cuestionario"
+    st.divider()
+
+    personas = cargar_personas(user_id)
+
+    if personas:
+        st.caption("MIS PERFILES")
+        for p in personas:
+            activo = st.session_state.persona_activa and \
+                     st.session_state.persona_activa["id"] == p["id"]
+            if st.button(
+                f"{'▶ ' if activo else ''}{p['nombre']}",
+                key=f"sidebar_{p['id']}",
+                use_container_width=True,
+                type="primary" if activo else "secondary"
+            ):
+                st.session_state.persona_activa = p
+                st.session_state.vista = "perfil"
+                st.rerun()
+
+    st.write("")
+    if st.button("➕ Nuevo perfil", use_container_width=True):
+        st.session_state.vista = "nueva_persona"
         st.rerun()
 
-# ── Inicializar el estado de la sesión ────────────────────────────
-# st.session_state es el "almacén" en memoria de Streamlit
-# Persiste entre interacciones del usuario sin necesidad de base de datos
-
-if "respuestas" not in st.session_state:
-    st.session_state.respuestas = {}  # Diccionario: {id_pregunta: respuesta}
-
-if "pregunta_actual" not in st.session_state:
-    st.session_state.pregunta_actual = 0  # Índice de la pregunta que se muestra
-
-if "dieta_generada" not in st.session_state:
-    st.session_state.dieta_generada = None  # Aquí guardaremos la respuesta de la IA
-
-if "fase" not in st.session_state:
-    st.session_state.fase = "cuestionario"  # Puede ser: "cuestionario" o "resultado"
+    st.divider()
+    if st.button("Cerrar sesión", use_container_width=True):
+        supabase.auth.sign_out()
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
 
-# ── Función: construir el prompt para la IA ───────────────────────
-def construir_prompt(respuestas: dict) -> str:
-    """
-    Convierte el diccionario de respuestas del usuario en un texto
-    estructurado que la IA pueda leer y entender fácilmente.
-    """
-    lineas = ["PERFIL DEL USUARIO:"]
-    lineas.append("=" * 40)
-
-    # Mapeo de IDs técnicos a etiquetas legibles
-    etiquetas = {
-        "edad": "Edad",
-        "sexo": "Sexo biológico",
-        "peso": "Peso",
-        "altura": "Altura",
-        "objetivo": "Objetivo principal",
-        "actividad": "Nivel de actividad física",
-        "intolerancias": "Alergias / intolerancias",
-        "condicion_medica": "Condiciones médicas",
-        "comidas_dia": "Comidas al día",
+# ── FUNCIONES IA ──────────────────────────────────────────────────
+def persona_a_prompt(persona: dict) -> str:
+    campos = {
+        "nombre": "Nombre", "edad": "Edad", "sexo": "Sexo",
+        "peso": "Peso (kg)", "altura": "Altura (cm)",
+        "objetivo": "Objetivo", "actividad": "Actividad física",
+        "intolerancias": "Intolerancias", "condicion_medica": "Condición médica",
         "preferencias": "Preferencias dietéticas"
     }
-
-    # Agregar unidades a los valores numéricos
-    unidades = {
-        "peso": "kg",
-        "altura": "cm",
-        "edad": "años"
-    }
-
-    for id_pregunta, etiqueta in etiquetas.items():
-        if id_pregunta in respuestas:
-            valor = respuestas[id_pregunta]
-            unidad = unidades.get(id_pregunta, "")
-            # Si es una lista (de opciones múltiples), la convertimos a texto
+    lineas = ["PERFIL:"]
+    for campo, etiqueta in campos.items():
+        valor = persona.get(campo)
+        if valor:
             if isinstance(valor, list):
                 valor = ", ".join(valor)
-            lineas.append(f"{etiqueta}: {valor} {unidad}".strip())
-
+            lineas.append(f"{etiqueta}: {valor}")
     return "\n".join(lineas)
 
-def evaluar_perfil(respuestas: dict) -> dict:
-    """
-    Fase 1 del sistema de dos pasos: la IA evalúa si tiene suficiente
-    información o si necesita hacer preguntas adicionales.
-    Devuelve: {"suficiente": True/False, "preguntas_adicionales": [...], "razon": "..."}
-    """
-    from groq import Groq
+def generar_dieta(persona: dict, dias: int = 7, historial: str = "") -> str:
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-    perfil_texto = construir_prompt(respuestas)
+    perfil_texto = persona_a_prompt(persona)
+    contexto = f"\n\nHISTORIAL PREVIO:\n{historial}" if historial else ""
 
     respuesta = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
                 "role": "system",
-                "content": """Eres un nutricionista clínico experto. Tu tarea es evaluar si tienes 
-suficiente información sobre un usuario para generar un plan de alimentación seguro y personalizado.
+                "content": f"""Eres un nutricionista clínico experto. Genera un plan de alimentación COMPLETO para {dias} días.
 
-Responde ÚNICAMENTE con un JSON válido, sin texto adicional, con esta estructura exacta:
-{
-  "suficiente": true o false,
-  "razon": "explicación breve de por qué sí o no tienes suficiente info",
-  "preguntas_adicionales": ["pregunta 1", "pregunta 2"]
-}
-
-- Si tienes suficiente información, pon suficiente: true y preguntas_adicionales: []
-- Si falta información crítica para la seguridad o la personalización, pon suficiente: false
-  y lista máximo 3 preguntas concretas y específicas que necesitas.
-- Solo pide información realmente necesaria, no hagas preguntas por hacer."""
-            },
-            {
-                "role": "user",
-                "content": f"Evalúa si tengo suficiente información para este perfil:\n\n{perfil_texto}"
-            }
-        ],
-        max_tokens=500
-    )
-
-    import json
-    texto = respuesta.choices[0].message.content.strip()
-    # Limpiar por si el modelo añade ```json ... ```
-    texto = texto.replace("```json", "").replace("```", "").strip()
-    return json.loads(texto)
-
-# ── Función: llamar a la API de Claude ───────────────────────────
-def generar_dieta(respuestas: dict, historial_previo: str = "") -> str:
-    from groq import Groq
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-    perfil_texto = construir_prompt(respuestas)
-
-    contexto_historial = ""
-    if historial_previo:
-        contexto_historial = f"\n\nHISTORIAL — Planes anteriores de este usuario:\n{historial_previo}\nEvoluciona el plan respecto a los anteriores."
-
-    respuesta = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {
-                "role": "system",
-                "content": """Eres un nutricionista clínico experto. Genera un plan de alimentación COMPLETO y DETALLADO.
-
-OBLIGATORIO — debes incluir TODOS estos apartados sin excepción:
-
-1. CALORÍAS DIARIAS ESTIMADAS
-   - Calcula usando la fórmula de Harris-Benedict con el peso, altura, edad y actividad del usuario
-   - Ajusta según el objetivo (déficit del 15% para perder peso, superávit del 10% para ganar músculo)
-
-2. DISTRIBUCIÓN DE MACRONUTRIENTES
-   - Proteínas: X gramos (Y%)
-   - Carbohidratos: X gramos (Y%)
-   - Grasas: X gramos (Y%)
-
-3. PLAN SEMANAL COMPLETO — 7 días, cada día con:
-   - Desayuno: descripción detallada con cantidades
-   - Almuerzo: descripción detallada con cantidades
-   - Cena: descripción detallada con cantidades
-   - Snacks: 1-2 opciones concretas
-
-   IMPORTANTE: No dejes ningún día vacío. Cada comida debe tener alimentos específicos con cantidades en gramos o unidades.
-
-4. LISTA DE ALIMENTOS RECOMENDADOS
-   - 10 alimentos clave para el objetivo del usuario
-
+OBLIGATORIO incluir:
+1. CALORÍAS DIARIAS (cálculo Harris-Benedict con los datos del perfil)
+2. MACRONUTRIENTES (proteínas, carbohidratos y grasas en gramos y porcentaje)
+3. PLAN DE {dias} DÍAS — cada día con desayuno, almuerzo, cena y snacks con cantidades exactas
+4. LISTA DE 10 ALIMENTOS RECOMENDADOS
 5. 3 CONSEJOS PERSONALIZADOS
-   - Específicos para el perfil y objetivo del usuario
-
 6. ADVERTENCIA MÉDICA
-   - Recomendar consulta con médico o nutricionista antes de iniciar el plan
 
-Adapta TODO el plan a las intolerancias, condiciones médicas y preferencias indicadas.
-Si el usuario tiene una intolerancia o condición médica, nunca incluyas alimentos prohibidos.
-Responde en español. Sé específico con cantidades y alimentos concretos."""
+No dejes ningún día vacío. Sé específico con cantidades. Adapta todo a intolerancias y condiciones médicas.
+Responde en español."""
             },
             {
                 "role": "user",
-                "content": f"Genera mi plan de alimentación completo con este perfil:\n\n{perfil_texto}{contexto_historial}"
+                "content": f"Genera mi plan de {dias} días:\n\n{perfil_texto}{contexto}"
             }
         ],
         max_tokens=4000
     )
     return respuesta.choices[0].message.content
-    
-def ajustar_dieta(dieta_actual: str, instruccion: str) -> str:
-    from groq import Groq
+
+def evaluar_perfil_ia(persona: dict) -> dict:
+    import json
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    perfil_texto = persona_a_prompt(persona)
 
     respuesta = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
                 "role": "system",
-                "content": "Eres un nutricionista experto. El usuario ya tiene un plan de alimentación y quiere modificarlo. Aplica los cambios solicitados manteniendo el mismo formato y respetando las restricciones originales del usuario. Responde en español."
+                "content": """Evalúa si tienes suficiente información para generar un plan nutricional seguro.
+Responde SOLO con JSON:
+{"suficiente": true/false, "preguntas_adicionales": ["pregunta1", "pregunta2"]}
+Máximo 3 preguntas si faltan datos críticos."""
+            },
+            {"role": "user", "content": f"Evalúa este perfil:\n{perfil_texto}"}
+        ],
+        max_tokens=300
+    )
+    texto = respuesta.choices[0].message.content.strip()
+    texto = texto.replace("```json", "").replace("```", "").strip()
+    return json.loads(texto)
+
+def ajustar_dieta(dieta_actual: str, instruccion: str) -> str:
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    respuesta = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": "Eres nutricionista. Modifica el plan según las instrucciones manteniendo el formato y las restricciones originales. Responde en español."
             },
             {
                 "role": "user",
-                "content": f"Este es mi plan actual:\n\n{dieta_actual}\n\n---\nQuiero que hagas este cambio: {instruccion}"
+                "content": f"Plan actual:\n{dieta_actual}\n\nCambio solicitado: {instruccion}"
             }
         ],
-        max_tokens=2500
+        max_tokens=4000
     )
     return respuesta.choices[0].message.content
 
-# ── Interfaz de usuario ───────────────────────────────────────────
 
-# Cabecera
-st.title("🥗 NutriAI")
-st.caption("Tu plan de alimentación personalizado con inteligencia artificial")
-st.divider()
+# ══════════════════════════════════════════════════════════════════
+# VISTAS
+# ══════════════════════════════════════════════════════════════════
 
-# ── Dietas guardadas ──────────────────────────────────────────────
-perfiles = cargar_perfiles(user_id)
-if perfiles:
-    with st.expander(f"📂 Mis dietas guardadas ({len(perfiles)})"):
-        for pid, nombre, fecha in perfiles:
-            col_a, col_b, col_c = st.columns([4, 2, 1])
+# ── VISTA: Pantalla inicial sin perfiles ──────────────────────────
+if not personas and st.session_state.vista not in ["nueva_persona"]:
+    st.title("🥗 NutriAI")
+    st.write(f"Bienvenido, **{nombre_real}**. Para empezar, crea tu primer perfil.")
+    st.write("")
+    if st.button("➕ Crear mi primer perfil", type="primary", use_container_width=True):
+        st.session_state.vista = "nueva_persona"
+        st.rerun()
+    st.stop()
+
+
+# ── VISTA: Crear nueva persona ────────────────────────────────────
+elif st.session_state.vista == "nueva_persona":
+    st.title("➕ Nuevo perfil")
+    st.write("")
+
+    opciones_objetivo = [
+        "Perder peso", "Ganar masa muscular",
+        "Mantener peso actual", "Mejorar salud general",
+        "Controlar una condición médica"
+    ]
+    opciones_actividad = [
+        "Sedentario", "Ligeramente activo",
+        "Moderadamente activo", "Muy activo", "Atleta"
+    ]
+    opciones_preferencias = [
+        "Vegetariano", "Vegano", "Sin gluten",
+        "Sin lácteos", "Halal", "Kosher", "Ninguna"
+    ]
+
+    with st.form("form_nueva_persona"):
+        nombre_p = st.text_input("Nombre del perfil *", placeholder="Ej: Yo, Padre, María...")
+        col1, col2 = st.columns(2)
+        with col1:
+            edad_p = st.number_input("Edad *", min_value=5, max_value=100, value=None)
+            peso_p = st.number_input("Peso (kg) *", min_value=20.0, max_value=300.0, value=None)
+            sexo_p = st.radio("Sexo *", ["Masculino", "Femenino"], index=None, horizontal=True)
+        with col2:
+            altura_p = st.number_input("Altura (cm) *", min_value=50, max_value=250, value=None)
+            objetivo_p = st.selectbox("Objetivo *", [""] + opciones_objetivo)
+            actividad_p = st.selectbox("Actividad física *", [""] + opciones_actividad)
+        intolerancias_p = st.text_input("Intolerancias o alergias",
+                                         placeholder="Ej: lactosa, gluten... o ninguna")
+        condicion_p = st.text_input("Condición médica relevante",
+                                     placeholder="Ej: diabetes, hipertensión... o ninguna")
+        preferencias_p = st.multiselect("Preferencias dietéticas", opciones_preferencias)
+
+        if st.form_submit_button("Crear perfil", type="primary", use_container_width=True):
+            if not all([nombre_p, edad_p, peso_p, altura_p, sexo_p, objetivo_p, actividad_p]):
+                st.error("Rellena todos los campos obligatorios (*)")
+            else:
+                try:
+                    nueva = crear_persona(user_id, {
+                        "nombre": nombre_p, "edad": edad_p, "peso": peso_p,
+                        "altura": altura_p, "sexo": sexo_p, "objetivo": objetivo_p,
+                        "actividad": actividad_p, "intolerancias": intolerancias_p,
+                        "condicion_medica": condicion_p,
+                        "preferencias": preferencias_p
+                    })
+                    st.session_state.persona_activa = nueva
+                    st.session_state.vista = "perfil"
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+
+    if st.button("← Cancelar"):
+        st.session_state.vista = "perfil" if st.session_state.persona_activa else "perfiles"
+        st.rerun()
+
+
+# ── VISTA: Perfil + dietas ─────────────────────────────────────────
+elif st.session_state.vista in ["perfil", "perfiles"] and st.session_state.persona_activa:
+    persona = st.session_state.persona_activa
+
+    # Recargar datos actualizados de la persona
+    personas_actualizadas = cargar_personas(user_id)
+    persona_fresca = next((p for p in personas_actualizadas if p["id"] == persona["id"]), None)
+    if persona_fresca:
+        st.session_state.persona_activa = persona_fresca
+        persona = persona_fresca
+
+    st.title(f"👤 {persona['nombre']}")
+
+    # Datos básicos del perfil
+    with st.expander("📋 Datos del perfil", expanded=False):
+        with st.form("form_editar"):
+            col1, col2 = st.columns(2)
+            with col1:
+                edad_e = st.number_input("Edad", value=persona.get("edad") or 0, min_value=5, max_value=100)
+                peso_e = st.number_input("Peso (kg)", value=float(persona.get("peso") or 0))
+                sexo_e = st.radio("Sexo", ["Masculino", "Femenino"],
+                                   index=0 if persona.get("sexo") == "Masculino" else 1,
+                                   horizontal=True)
+            with col2:
+                altura_e = st.number_input("Altura (cm)", value=persona.get("altura") or 0, min_value=50, max_value=250)
+                objetivo_e = st.selectbox("Objetivo", [
+                    "Perder peso", "Ganar masa muscular",
+                    "Mantener peso actual", "Mejorar salud general",
+                    "Controlar una condición médica"
+                ], index=["Perder peso", "Ganar masa muscular",
+                           "Mantener peso actual", "Mejorar salud general",
+                           "Controlar una condición médica"].index(persona.get("objetivo", "Mejorar salud general"))
+                           if persona.get("objetivo") else 0)
+                actividad_e = st.selectbox("Actividad", [
+                    "Sedentario", "Ligeramente activo",
+                    "Moderadamente activo", "Muy activo", "Atleta"
+                ], index=["Sedentario", "Ligeramente activo",
+                           "Moderadamente activo", "Muy activo", "Atleta"].index(persona.get("actividad", "Sedentario"))
+                           if persona.get("actividad") else 0)
+            intolerancias_e = st.text_input("Intolerancias", value=persona.get("intolerancias") or "")
+            condicion_e = st.text_input("Condición médica", value=persona.get("condicion_medica") or "")
+
+            if st.form_submit_button("Guardar cambios", type="primary"):
+                try:
+                    actualizar_persona(persona["id"], user_id, {
+                        "edad": edad_e, "peso": peso_e, "altura": altura_e,
+                        "sexo": sexo_e, "objetivo": objetivo_e, "actividad": actividad_e,
+                        "intolerancias": intolerancias_e, "condicion_medica": condicion_e
+                    })
+                    st.success("✅ Perfil actualizado")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+
+    st.divider()
+
+    # ── Dietas guardadas ──────────────────────────────────────────
+    dietas = cargar_dietas(persona["id"], user_id)
+
+    if dietas:
+        st.subheader("📂 Dietas guardadas")
+        for d in dietas:
+            col_a, col_b, col_c, col_d = st.columns([3, 1, 1, 1])
             with col_a:
-                st.write(f"**{nombre}**")
+                st.write(f"**{d['nombre']}**")
             with col_b:
-                st.caption(fecha[:10])
+                st.caption(f"{d['dias']} días")
             with col_c:
-                if st.button("Ver", key=f"ver_{pid}"):
-                    datos = cargar_perfil_por_id(pid, user_id)
-                    st.session_state.dieta_generada = datos["dieta"]
-                    st.session_state.respuestas = datos["respuestas"]
-                    st.session_state.fase = "resultado"
-                    st.session_state.evaluacion_hecha = True
+                if st.button("Ver", key=f"ver_{d['id']}"):
+                    st.session_state.dieta_activa = cargar_dieta_por_id(d["id"], user_id)
+                    st.session_state.vista = "resultado"
+                    st.rerun()
+            with col_d:
+                if st.button("🗑️", key=f"del_{d['id']}"):
+                    eliminar_dieta(d["id"], user_id)
+                    st.rerun()
+        st.write("")
+
+    # ── Generar nueva dieta ───────────────────────────────────────
+    st.subheader("🍽️ Generar nueva dieta")
+    dias_dieta = st.slider("¿Para cuántos días?", min_value=1, max_value=30, value=7)
+
+    if st.button("Generar dieta", type="primary", use_container_width=True):
+        st.session_state.dias_dieta = dias_dieta
+        st.session_state.vista = "cuestionario"
+        st.session_state.respuestas_extra = {}
+        st.session_state.evaluacion_hecha = False
+        st.session_state.preguntas_adicionales = []
+        st.session_state.dieta_activa = None
+        st.rerun()
+
+    st.write("")
+    if st.button("🗑️ Eliminar este perfil", use_container_width=True):
+        eliminar_persona(persona["id"], user_id)
+        st.session_state.persona_activa = None
+        st.session_state.vista = "perfiles"
+        st.rerun()
+
+
+# ── VISTA: Cuestionario adicional ─────────────────────────────────
+elif st.session_state.vista == "cuestionario":
+    persona = st.session_state.persona_activa
+    st.title(f"🍽️ Nueva dieta — {persona['nombre']}")
+    st.write("")
+
+    if not st.session_state.get("evaluacion_hecha"):
+        with st.spinner("🔍 Evaluando el perfil..."):
+            try:
+                evaluacion = evaluar_perfil_ia(persona)
+                st.session_state.evaluacion_hecha = True
+                st.session_state.preguntas_adicionales = evaluacion.get("preguntas_adicionales", [])
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
+    elif st.session_state.preguntas_adicionales:
+        st.info("Necesito un poco más de información para personalizar tu plan:")
+        with st.form("preguntas_extra"):
+            respuestas_extra = {}
+            for i, pregunta in enumerate(st.session_state.preguntas_adicionales):
+                respuestas_extra[i] = st.text_area(pregunta, key=f"extra_{i}")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.form_submit_button("Continuar →", type="primary", use_container_width=True):
+                    st.session_state.respuestas_extra = respuestas_extra
+                    st.session_state.preguntas_adicionales = []
+                    st.rerun()
+            with col2:
+                if st.form_submit_button("Saltar y generar →", use_container_width=True):
                     st.session_state.preguntas_adicionales = []
                     st.rerun()
 
-# ── FASE: CUESTIONARIO ────────────────────────────────────────────
-if st.session_state.fase == "cuestionario":
-    if "preguntas_adicionales" not in st.session_state:
-        st.session_state.preguntas_adicionales = []
+    else:
+        with st.spinner("🤖 Generando tu plan de alimentación..."):
+            try:
+                # Construir contexto adicional
+                extras = ""
+                for i, preg in enumerate(st.session_state.get("respuestas_extra", {}).values()):
+                    if preg.strip():
+                        extras += f"\n- {preg}"
 
-    if "respuestas_adicionales" not in st.session_state:
-        st.session_state.respuestas_adicionales = {}
+                persona_con_extras = dict(persona)
+                if extras:
+                    persona_con_extras["notas_adicionales"] = extras
 
-    if "evaluacion_hecha" not in st.session_state:
-        st.session_state.evaluacion_hecha = False
+                # Historial de dietas anteriores
+                dietas_prev = cargar_dietas(persona["id"], user_id)
+                historial = "\n".join([f"- {d['nombre']} ({d['dias']} días, {d['creado_en'][:10]})"
+                                       for d in dietas_prev[:3]])
 
-    # Calcular progreso
-    preguntas_activas = obtener_preguntas_activas(st.session_state.respuestas)
-    total_preguntas = len(preguntas_activas)
-    pregunta_idx = st.session_state.pregunta_actual
-    progreso = pregunta_idx / total_preguntas
+                dias = st.session_state.get("dias_dieta", 7)
+                dieta_texto = generar_dieta(persona_con_extras, dias=dias, historial=historial)
 
-    # Mostrar barra de progreso
-    st.progress(progreso, text=f"Pregunta {pregunta_idx + 1} de {total_preguntas}")
-    st.write("")
+                st.session_state.dieta_activa = {
+                    "contenido": dieta_texto,
+                    "dias": dias,
+                    "persona_id": persona["id"],
+                    "nueva": True
+                }
+                st.session_state.vista = "resultado"
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                if st.button("Reintentar"):
+                    st.rerun()
 
-    # Verificar si ya respondimos todas las preguntas
-    if pregunta_idx >= total_preguntas:
-        st.session_state.fase = "resultado"
+
+# ── VISTA: Resultado de la dieta ──────────────────────────────────
+elif st.session_state.vista == "resultado":
+    persona = st.session_state.persona_activa
+    dieta = st.session_state.get("dieta_activa", {})
+
+    if not dieta:
+        st.session_state.vista = "perfil"
         st.rerun()
 
-    # Mostrar la pregunta actual
-    pregunta = preguntas_activas[pregunta_idx]
+    st.title(f"🥗 Plan de alimentación — {persona['nombre']}")
+    st.caption(f"Plan de {dieta.get('dias', 7)} días")
+    st.write("")
 
-    st.subheader(pregunta["texto"])
-    if not pregunta["requerida"]:
-        st.caption("(Opcional — puedes saltarte esta pregunta)")
-    
-    # Renderizar el tipo de input correcto según el tipo de pregunta
-    respuesta_actual = None
+    st.markdown(dieta["contenido"])
 
-    if pregunta["tipo"] == "numero":
-        respuesta_actual = st.number_input(
-            label="Tu respuesta",
-            min_value=pregunta["min"],
-            max_value=pregunta["max"],
-            value=None,
-            placeholder="Escribe un número...",
-            label_visibility="collapsed"
-        )
+    st.divider()
 
-    elif pregunta["tipo"] == "opciones":
-        respuesta_actual = st.radio(
-            label="Selecciona una opción",
-            options=pregunta["opciones"],
-            index=None,
-            label_visibility="collapsed"
-        )
+    # Descargar PDF
+    pdf_bytes = generar_pdf(persona["nombre"], dieta["contenido"])
+    st.download_button(
+        "📄 Descargar PDF",
+        data=pdf_bytes,
+        file_name=f"dieta_{persona['nombre'].lower()}.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
 
-    elif pregunta["tipo"] == "opciones_multiple":
-        respuesta_actual = st.multiselect(
-            label="Puedes seleccionar varias opciones",
-            options=pregunta["opciones"],
-            label_visibility="collapsed"
-        )
-        if not respuesta_actual:
-            respuesta_actual = None  # Tratar vacío como no respondido
+    # Ajustar dieta
+    with st.expander("🔄 Pedir una variación"):
+        instruccion = st.text_area("¿Qué quieres cambiar?",
+                                    placeholder="Ej: Hazla más económica, más proteína...")
+        if st.button("Aplicar cambio", disabled=not instruccion, type="primary"):
+            with st.spinner("Aplicando cambios..."):
+                try:
+                    nueva = ajustar_dieta(dieta["contenido"], instruccion)
+                    st.session_state.dieta_activa["contenido"] = nueva
+                    st.session_state.dieta_activa["nueva"] = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
 
-    elif pregunta["tipo"] == "texto_libre":
-        respuesta_actual = st.text_area(
-            label="Tu respuesta",
-            placeholder=pregunta.get("placeholder", "Escribe aquí..."),
-            label_visibility="collapsed"
-        )
-        if respuesta_actual == "":
-            respuesta_actual = None
+    # Guardar dieta
+    if dieta.get("nueva"):
+        with st.expander("💾 Guardar esta dieta"):
+            nombre_dieta = st.text_input("Nombre para esta dieta",
+                                          placeholder="Ej: Plan enero, Dieta volumen...")
+            if st.button("Guardar", disabled=not nombre_dieta, type="primary"):
+                try:
+                    guardar_dieta(user_id, persona["id"], nombre_dieta,
+                                  dieta["contenido"], dieta.get("dias", 7))
+                    st.session_state.dieta_activa["nueva"] = False
+                    st.success("✅ Dieta guardada")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
 
     st.write("")
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col1:
-        if pregunta_idx > 0:
-            if st.button("← Atrás", use_container_width=True):
-                st.session_state.pregunta_actual -= 1
-                st.rerun()
-
-    with col3:
-        if pregunta["requerida"]:
-            etiqueta_boton = "Siguiente →"
-        else:
-            etiqueta_boton = "Siguiente →" if respuesta_actual else "Saltar →"
-
-        # Guardamos en session_state para poder leerlo al pulsar Enter
-        st.session_state["_respuesta_pendiente"] = respuesta_actual
-
-        submitted = st.button(
-            etiqueta_boton,
-            disabled=(pregunta["requerida"] and respuesta_actual is None),
-            use_container_width=True,
-            type="primary"
-        )
-
-        if submitted:
-            if respuesta_actual is not None:
-                st.session_state.respuestas[pregunta["id"]] = respuesta_actual
-            st.session_state.pregunta_actual += 1
-            st.rerun()
-
-    # Mostrar resumen de respuestas acumuladas (para debugging / transparencia)
-    if st.session_state.respuestas:
-        with st.expander("Ver respuestas registradas hasta ahora"):
-            for k, v in st.session_state.respuestas.items():
-                st.write(f"**{k}:** {v}")
-
-
-# ── FASE: RESULTADO (generación de dieta) ─────────────────────────
-elif st.session_state.fase == "resultado":
-
-    if st.session_state.dieta_generada is None:
-
-        st.info("✅ ¡Cuestionario completado! Analizando tu perfil...")
-
-        with st.expander("📋 Tu perfil nutricional", expanded=True):
-            for pregunta in PREGUNTAS:
-                if pregunta["id"] in st.session_state.respuestas:
-                    valor = st.session_state.respuestas[pregunta["id"]]
-                    if isinstance(valor, list):
-                        valor = ", ".join(valor)
-                    st.write(f"**{pregunta['texto']}**")
-                    st.write(f"→ {valor}")
-
-        st.write("")
-
-        # ── EVALUACIÓN: ¿tenemos suficiente info? ──────────────────
-        if not st.session_state.evaluacion_hecha:
-            with st.spinner("🔍 Evaluando si necesito más información..."):
-                try:
-                    evaluacion = evaluar_perfil(st.session_state.respuestas)
-                    st.session_state.evaluacion_hecha = True
-
-                    if evaluacion["suficiente"]:
-                        # Tenemos todo — generamos la dieta directamente
-                        with st.spinner("🤖 Generando tu plan de alimentación..."):
-                            perfiles_previos = cargar_perfiles(user_id)
-                            historial = ""
-                            if perfiles_previos:
-                                historial = "\n".join([f"- Plan '{n}' del {f[:10]}" for _, n, f in perfiles_previos[:3]])
-                            dieta = generar_dieta(st.session_state.respuestas, historial_previo=historial)
-                            st.session_state.dieta_generada = dieta
-                            st.rerun()
-                    else:
-                        # Faltan datos — guardamos las preguntas adicionales
-                        st.session_state.preguntas_adicionales = evaluacion["preguntas_adicionales"]
-                        st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Error al conectar con la IA: {str(e)}")
-                    if st.button("Reintentar"):
-                        st.rerun()
-
-        # ── PREGUNTAS ADICIONALES ──────────────────────────────────
-        elif st.session_state.preguntas_adicionales:
-            st.warning("⚠️ Necesito un poco más de información para personalizar mejor tu plan:")
-            st.write("")
-
-            with st.form("preguntas_extra"):
-                respuestas_extra = {}
-                for i, pregunta in enumerate(st.session_state.preguntas_adicionales):
-                    respuestas_extra[f"extra_{i}"] = st.text_area(
-                        label=pregunta,
-                        placeholder="Escribe tu respuesta aquí...",
-                        key=f"extra_{i}"
-                    )
-
-                if st.form_submit_button("Continuar →", type="primary", use_container_width=True):
-                    # Añadir las respuestas adicionales al perfil
-                    for i, pregunta in enumerate(st.session_state.preguntas_adicionales):
-                        respuesta = respuestas_extra.get(f"extra_{i}", "").strip()
-                        if respuesta:
-                            st.session_state.respuestas[f"adicional_{i}"] = f"{pregunta}: {respuesta}"
-
-                    st.session_state.preguntas_adicionales = []
-
-                    with st.spinner("🤖 Generando tu plan de alimentación..."):
-                        try:
-                            perfiles_previos = cargar_perfiles(user_id)
-                            historial = ""
-                            if perfiles_previos:
-                                historial = "\n".join([f"- Plan '{n}' del {f[:10]}" for _, n, f in perfiles_previos[:3]])
-                            dieta = generar_dieta(st.session_state.respuestas, historial_previo=historial)
-                            st.session_state.dieta_generada = dieta
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Error: {str(e)}")
-
-    else:
-        st.success("✅ ¡Tu plan de alimentación está listo!")
-        st.write("")
-        st.markdown(st.session_state.dieta_generada)
-        # Botón de descarga PDF
-        pdf_bytes = generar_pdf(nombre_real, st.session_state.dieta_generada)
-        st.download_button(
-            label="📄 Descargar dieta en PDF",
-            data=pdf_bytes,
-            file_name="mi_plan_nutricional.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-        st.write("")
-        with st.expander("🔄 Pedir una variación de la dieta"):
-            instruccion = st.text_area(
-                "¿Qué quieres cambiar?",
-                placeholder="Ej: Hazla más económica, cambia las cenas, añade más proteína en el desayuno..."
-            )
-            if st.button("Regenerar con este ajuste", disabled=not instruccion, type="primary"):
-                with st.spinner("Aplicando tus cambios..."):
-                    try:
-                        dieta_ajustada = ajustar_dieta(
-                            st.session_state.dieta_generada,
-                            instruccion
-                        )
-                        st.session_state.dieta_generada = dieta_ajustada
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-        st.divider()
-
-        # Guardar perfil
-        st.write("")
-        with st.expander("💾 Guardar este perfil"):
-            nombre_perfil = st.text_input("¿Con qué nombre quieres guardar este perfil?",
-                                            placeholder="Ej: Plan enero, Perfil atleta, etc.")
-            if st.button("Guardar", disabled=not nombre_perfil):
-                try:
-                    resultado = guardar_perfil(user_id, nombre_perfil, st.session_state.respuestas,
-                                st.session_state.dieta_generada)
-                    if resultado:
-                        st.success(f"✅ Perfil '{nombre_perfil}' guardado correctamente.")
-                    else:
-                        st.error("❌ No se pudo guardar. Revisa la consola.")
-                except Exception as e:
-                    st.error(f"❌ Error al guardar: {str(e)}")
-
-        if st.button("🔄 Hacer un nuevo plan", use_container_width=True):
-            st.session_state.respuestas = {}
-            st.session_state.pregunta_actual = 0
-            st.session_state.dieta_generada = None
-            st.session_state.fase = "cuestionario"
-            st.session_state.preguntas_adicionales = []
-            st.session_state.respuestas_adicionales = {}
-            st.session_state.evaluacion_hecha = False
-            st.rerun()
+    if st.button("← Volver al perfil", use_container_width=True):
+        st.session_state.vista = "perfil"
+        st.rerun()
