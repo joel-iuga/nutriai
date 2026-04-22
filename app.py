@@ -217,35 +217,56 @@ def generar_dieta(respuestas: dict, historial_previo: str = "") -> str:
 
     contexto_historial = ""
     if historial_previo:
-        contexto_historial = f"\n\nHISTORIAL — Planes anteriores de este usuario:\n{historial_previo}\nTen en cuenta esta información para mejorar y evolucionar el plan actual."
+        contexto_historial = f"\n\nHISTORIAL — Planes anteriores de este usuario:\n{historial_previo}\nEvoluciona el plan respecto a los anteriores."
 
     respuesta = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
                 "role": "system",
-                "content": """Eres un nutricionista clínico experto con más de 15 años de experiencia.
-Tu tarea es analizar el perfil nutricional del usuario y generar un plan de alimentación personalizado.
+                "content": """Eres un nutricionista clínico experto. Genera un plan de alimentación COMPLETO y DETALLADO.
 
-INSTRUCCIONES:
-1. Si la información es suficiente, genera un plan completo para 7 días.
-2. Si falta información crítica, indica exactamente qué datos necesitas y por qué.
-3. Incluye siempre: calorías diarias estimadas, distribución de macronutrientes,
-   plan día a día (desayuno, almuerzo, cena, snacks) y 3 consejos personalizados.
-4. Adapta el plan a intolerancias, condiciones médicas y preferencias del usuario.
-5. Si hay historial previo, evoluciona el plan (no repitas exactamente lo mismo).
-6. Añade al final una advertencia recomendando consultar con un médico o nutricionista real.
-Responde siempre en español y de forma clara y estructurada."""
+OBLIGATORIO — debes incluir TODOS estos apartados sin excepción:
+
+1. CALORÍAS DIARIAS ESTIMADAS
+   - Calcula usando la fórmula de Harris-Benedict con el peso, altura, edad y actividad del usuario
+   - Ajusta según el objetivo (déficit del 15% para perder peso, superávit del 10% para ganar músculo)
+
+2. DISTRIBUCIÓN DE MACRONUTRIENTES
+   - Proteínas: X gramos (Y%)
+   - Carbohidratos: X gramos (Y%)
+   - Grasas: X gramos (Y%)
+
+3. PLAN SEMANAL COMPLETO — 7 días, cada día con:
+   - Desayuno: descripción detallada con cantidades
+   - Almuerzo: descripción detallada con cantidades
+   - Cena: descripción detallada con cantidades
+   - Snacks: 1-2 opciones concretas
+
+   IMPORTANTE: No dejes ningún día vacío. Cada comida debe tener alimentos específicos con cantidades en gramos o unidades.
+
+4. LISTA DE ALIMENTOS RECOMENDADOS
+   - 10 alimentos clave para el objetivo del usuario
+
+5. 3 CONSEJOS PERSONALIZADOS
+   - Específicos para el perfil y objetivo del usuario
+
+6. ADVERTENCIA MÉDICA
+   - Recomendar consulta con médico o nutricionista antes de iniciar el plan
+
+Adapta TODO el plan a las intolerancias, condiciones médicas y preferencias indicadas.
+Si el usuario tiene una intolerancia o condición médica, nunca incluyas alimentos prohibidos.
+Responde en español. Sé específico con cantidades y alimentos concretos."""
             },
             {
                 "role": "user",
-                "content": f"Analiza mi perfil y genera mi plan de alimentación:\n\n{perfil_texto}{contexto_historial}"
+                "content": f"Genera mi plan de alimentación completo con este perfil:\n\n{perfil_texto}{contexto_historial}"
             }
         ],
-        max_tokens=2500
+        max_tokens=4000
     )
     return respuesta.choices[0].message.content
-
+    
 def ajustar_dieta(dieta_actual: str, instruccion: str) -> str:
     from groq import Groq
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -530,7 +551,7 @@ elif st.session_state.fase == "resultado":
                         st.error("❌ No se pudo guardar. Revisa la consola.")
                 except Exception as e:
                     st.error(f"❌ Error al guardar: {str(e)}")
-                    
+
         if st.button("🔄 Hacer un nuevo plan", use_container_width=True):
             st.session_state.respuestas = {}
             st.session_state.pregunta_actual = 0
