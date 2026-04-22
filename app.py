@@ -1,75 +1,111 @@
 # app.py
-# Prototipo Fase 1 — App de nutrición personalizada con IA
-
 import streamlit as st
 from groq import Groq
 import os
 from dotenv import load_dotenv
+from supabase import create_client
 from preguntas import PREGUNTAS, obtener_preguntas_activas
-from base_datos import inicializar_db, guardar_perfil, cargar_perfiles, cargar_perfil_por_id, eliminar_perfil
-import yaml
-import streamlit_authenticator as stauth
-from yaml.loader import SafeLoader
+from base_datos import guardar_perfil, cargar_perfiles, cargar_perfil_por_id, eliminar_perfil
 from exportar_pdf import generar_pdf
 
-# ── Configuración inicial ──────────────────────────────────────────
-load_dotenv()  # Carga las variables del archivo .env
+load_dotenv()
 
-inicializar_db()
-
-# ── Autenticación ──────────────────────────────────────────────────
-with open("usuarios.yaml") as f:
-    config = yaml.load(f, Loader=SafeLoader)
-
-authenticator = stauth.Authenticate(
-    config["credentials"],
-    config["cookie"]["name"],
-    config["cookie"]["key"],
-    config["cookie"]["expiry_days"]
+st.set_page_config(
+    page_title="NutriAI — Dieta personalizada",
+    page_icon="🥗",
+    layout="centered"
 )
 
-authenticator.login()
+# ── Cliente Supabase ───────────────────────────────────────────────
+supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-# Solo mostrar registro si no está autenticado
-if st.session_state["authentication_status"] is not True:
-    with st.expander("¿No tienes cuenta? Regístrate aquí"):
+# ── Estado de autenticación ────────────────────────────────────────
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "auth_view" not in st.session_state:
+    st.session_state.auth_view = "login"  # "login" o "registro"
+
+# ── Pantalla de login/registro ─────────────────────────────────────
+if st.session_state.user is None:
+    st.title("🥗 NutriAI")
+    st.caption("Tu plan de alimentación personalizado con inteligencia artificial")
+    st.divider()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Iniciar sesión", use_container_width=True,
+                     type="primary" if st.session_state.auth_view == "login" else "secondary"):
+            st.session_state.auth_view = "login"
+            st.rerun()
+    with col2:
+        if st.button("Crear cuenta", use_container_width=True,
+                     type="primary" if st.session_state.auth_view == "registro" else "secondary"):
+            st.session_state.auth_view = "registro"
+            st.rerun()
+
+    st.write("")
+
+    if st.session_state.auth_view == "login":
+        with st.form("form_login"):
+            email = st.text_input("Email")
+            password = st.text_input("Contraseña", type="password")
+            if st.form_submit_button("Entrar", use_container_width=True, type="primary"):
+                try:
+                    response = supabase.auth.sign_in_with_password({
+                        "email": email,
+                        "password": password
+                    })
+                    st.session_state.user = response.user
+                    st.rerun()
+                except Exception:
+                    st.error("Email o contraseña incorrectos")
+
+    else:
         st.info("""
         **La contraseña debe tener:**
         - Mínimo 8 caracteres
         - Al menos una letra mayúscula
         - Al menos una letra minúscula
         - Al menos un número
-        - Al menos un carácter especial (!@#$%^&*)
         """)
-        try:
-            email_nuevo, username_nuevo, name_nuevo = authenticator.register_user(
-                captcha=True
-            )
-            if email_nuevo:
-                st.success(f"✅ Usuario '{username_nuevo}' creado. Ya puedes iniciar sesión.")
-                with open("usuarios.yaml", "w") as f:
-                    yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-        except Exception as e:
-            st.error(f"Error al registrar: {str(e)}")
+        with st.form("form_registro"):
+            nombre_reg = st.text_input("Nombre")
+            email_reg = st.text_input("Email")
+            password_reg = st.text_input("Contraseña", type="password")
+            password_rep = st.text_input("Repetir contraseña", type="password")
+            if st.form_submit_button("Crear cuenta", use_container_width=True, type="primary"):
+                if password_reg != password_rep:
+                    st.error("Las contraseñas no coinciden")
+                elif len(password_reg) < 8:
+                    st.error("La contraseña debe tener al menos 8 caracteres")
+                else:
+                    try:
+                        response = supabase.auth.sign_up({
+                            "email": email_reg,
+                            "password": password_reg,
+                            "options": {"data": {"nombre": nombre_reg}}
+                        })
+                        st.success("✅ Cuenta creada. Revisa tu email para confirmarla y luego inicia sesión.")
+                        st.session_state.auth_view = "login"
+                    except Exception as e:
+                        st.error(f"Error al registrarse: {str(e)}")
 
-if st.session_state["authentication_status"] is False:
-    st.error("Usuario o contraseña incorrectos")
     st.stop()
 
-elif st.session_state["authentication_status"] is None:
-    st.info("Introduce tu usuario y contraseña para acceder")
-    st.stop()
+# ── Usuario autenticado ────────────────────────────────────────────
+user_id = st.session_state.user.id
+nombre_real = st.session_state.user.user_metadata.get("nombre", st.session_state.user.email)
 
-# Si llegamos aquí, el usuario está autenticado
-nombre_usuario = st.session_state["username"]
-nombre_real = st.session_state["name"]
-
-# Botón de logout en la barra lateral
 with st.sidebar:
     st.write(f"👤 {nombre_real}")
-    authenticator.logout("Cerrar sesión")
-    st.divider()
-
+    if st.button("Cerrar sesión", use_container_width=True):
+        supabase.auth.sign_out()
+        st.session_state.user = None
+        st.session_state.respuestas = {}
+        st.session_state.pregunta_actual = 0
+        st.session_state.dieta_generada = None
+        st.session_state.fase = "cuestionario"
+        st.rerun()
 
 # ── Inicializar el estado de la sesión ────────────────────────────
 # st.session_state es el "almacén" en memoria de Streamlit
@@ -238,7 +274,7 @@ st.caption("Tu plan de alimentación personalizado con inteligencia artificial")
 st.divider()
 
 # ── Dietas guardadas ──────────────────────────────────────────────
-perfiles = cargar_perfiles(nombre_usuario)
+perfiles = cargar_perfiles(user_id)
 if perfiles:
     with st.expander(f"📂 Mis dietas guardadas ({len(perfiles)})"):
         for pid, nombre, fecha in perfiles:
@@ -249,7 +285,7 @@ if perfiles:
                 st.caption(fecha[:10])
             with col_c:
                 if st.button("Ver", key=f"ver_{pid}"):
-                    datos = cargar_perfil_por_id(pid, nombre_usuario)
+                    datos = cargar_perfil_por_id(pid, user_id)
                     st.session_state.dieta_generada = datos["dieta"]
                     st.session_state.respuestas = datos["respuestas"]
                     st.session_state.fase = "resultado"
@@ -395,7 +431,7 @@ elif st.session_state.fase == "resultado":
                     if evaluacion["suficiente"]:
                         # Tenemos todo — generamos la dieta directamente
                         with st.spinner("🤖 Generando tu plan de alimentación..."):
-                            perfiles_previos = cargar_perfiles(nombre_usuario)
+                            perfiles_previos = cargar_perfiles(user_id)
                             historial = ""
                             if perfiles_previos:
                                 historial = "\n".join([f"- Plan '{n}' del {f[:10]}" for _, n, f in perfiles_previos[:3]])
@@ -437,7 +473,7 @@ elif st.session_state.fase == "resultado":
 
                     with st.spinner("🤖 Generando tu plan de alimentación..."):
                         try:
-                            perfiles_previos = cargar_perfiles(nombre_usuario)
+                            perfiles_previos = cargar_perfiles(user_id)
                             historial = ""
                             if perfiles_previos:
                                 historial = "\n".join([f"- Plan '{n}' del {f[:10]}" for _, n, f in perfiles_previos[:3]])
@@ -485,7 +521,7 @@ elif st.session_state.fase == "resultado":
             nombre_perfil = st.text_input("¿Con qué nombre quieres guardar este perfil?",
                                             placeholder="Ej: Plan enero, Perfil atleta, etc.")
             if st.button("Guardar", disabled=not nombre_perfil):
-                guardar_perfil(nombre_usuario, nombre_perfil, st.session_state.respuestas,
+                guardar_perfil(user_id, nombre_perfil, st.session_state.respuestas,
                             st.session_state.dieta_generada)
                 st.success(f"✅ Perfil '{nombre_perfil}' guardado correctamente.")
 

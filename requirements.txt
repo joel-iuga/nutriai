@@ -1,7 +1,5 @@
 streamlit
 groq
 python-dotenv
-streamlit-authenticator
-pyyaml
-bcrypt
 fpdf2
+supabase
