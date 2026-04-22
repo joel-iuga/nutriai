@@ -12,17 +12,18 @@ def get_client():
 def guardar_perfil(user_id: str, nombre: str, respuestas: dict, dieta: str) -> bool:
     try:
         client = get_client()
-        client.table("perfiles").insert({
+        result = client.table("perfiles").insert({
             "user_id": user_id,
             "nombre": nombre,
             "respuestas": respuestas,
             "dieta": dieta
         }).execute()
+        print(f"Resultado guardar: {result}")
         return True
     except Exception as e:
         print(f"Error guardando perfil: {e}")
-        return False
-
+        raise e  # Re-lanzar para que app.py lo capture
+        
 def cargar_perfiles(user_id: str) -> list:
     try:
         client = get_client()
