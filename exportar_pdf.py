@@ -46,18 +46,19 @@ def generar_pdf(nombre_usuario: str, contenido) -> bytes:
     for dia in contenido.get("dias", []):
         pdf.set_font("DejaVu", "B", 12)
         pdf.set_fill_color(225, 245, 238)
-        pdf.cell(0, 9, f"  {dia.get('dia','')}  —  {dia.get('calorias','')} kcal",
-                 new_x="LMARGIN", new_y="NEXT", fill=True)
+        pdf.cell(0, 9, f"  {dia.get('dia','')}  -  {dia.get('calorias','')} kcal",
+                new_x="LMARGIN", new_y="NEXT", fill=True)
         pdf.set_font("DejaVu", "", 10)
         for label, key in [("Desayuno","desayuno"),("Almuerzo","almuerzo"),
                             ("Cena","cena"),("Snack","snack")]:
             if dia.get(key):
+                # Label en su propia línea, luego el contenido
                 pdf.set_font("DejaVu", "B", 10)
-                pdf.cell(22, 6, f"{label}:")
+                pdf.multi_cell(0, 6, f"{label}:")
                 pdf.set_font("DejaVu", "", 10)
-                pdf.multi_cell(0, 6, dia[key])
+                pdf.multi_cell(0, 6, str(dia[key]))
         pdf.ln(3)
-
+        
     # Consejos
     consejos = contenido.get("consejos", [])
     if consejos:
