@@ -23,10 +23,16 @@ def persona_a_prompt(persona: dict) -> str:
     return "\n".join(lineas)
 
 def generar_dieta(persona: dict, dias: int = 7, historial: str = "") -> dict:
-    """Genera la dieta y devuelve un dict estructurado."""
     client = get_client()
     perfil_texto = persona_a_prompt(persona)
     contexto = f"\n\nHISTORIAL PREVIO:\n{historial}" if historial else ""
+
+    favoritas_instruccion = ""
+    if persona.get("comidas_favoritas"):
+        favoritas_instruccion = f"""
+COMIDAS FAVORITAS DEL USUARIO (incorporar según la frecuencia indicada):
+{persona['comidas_favoritas']}
+Intenta incluirlas en los días que corresponda respetando el objetivo nutricional."""
 
     nombres_dias = ["Lunes", "Martes", "Miércoles", "Jueves",
                     "Viernes", "Sábado", "Domingo",
@@ -43,7 +49,7 @@ def generar_dieta(persona: dict, dias: int = 7, historial: str = "") -> dict:
             {
                 "role": "system",
                 "content": f"""Eres un nutricionista clínico experto. Genera un plan de alimentación para {dias} días.
-
+{favoritas_instruccion}
 Responde ÚNICAMENTE con un JSON válido, sin texto adicional ni backticks. Estructura exacta:
 {{
   "calorias_diarias": 2350,
@@ -59,10 +65,9 @@ Responde ÚNICAMENTE con un JSON válido, sin texto adicional ni backticks. Estr
     }}
   ],
   "alimentos_recomendados": ["alimento1", "alimento2", "alimento3", "alimento4", "alimento5"],
-  "consejos": ["consejo personalizado 1", "consejo personalizado 2", "consejo personalizado 3"],
+  "consejos": ["consejo 1", "consejo 2", "consejo 3"],
   "advertencia": "texto de advertencia médica breve"
 }}
-
 Los días deben ser exactamente: {lista_dias}.
 Adapta TODO a las intolerancias y condiciones médicas del perfil.
 No dejes ningún campo vacío. Sé específico con cantidades."""
@@ -74,7 +79,6 @@ No dejes ningún campo vacío. Sé específico con cantidades."""
         ],
         max_tokens=4000
     )
-
     texto = respuesta.choices[0].message.content.strip()
     texto = texto.replace("```json", "").replace("```", "").strip()
     return json.loads(texto)
@@ -82,7 +86,6 @@ No dejes ningún campo vacío. Sé específico con cantidades."""
 def evaluar_perfil_ia(persona: dict) -> dict:
     client = get_client()
     perfil_texto = persona_a_prompt(persona)
-
     respuesta = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
@@ -116,6 +119,32 @@ def ajustar_dieta(dieta_dict: dict, instruccion: str) -> dict:
             }
         ],
         max_tokens=4000
+    )
+    texto = respuesta.choices[0].message.content.strip()
+    texto = texto.replace("```json", "").replace("```", "").strip()
+    return json.loads(texto)
+
+def completar_datos_comida(nombre: str, tipo: str) -> dict:
+    client = get_client()
+    respuesta = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": """Eres un nutricionista experto. Estima los datos nutricionales de una comida para una ración típica.
+Responde SOLO con JSON sin backticks:
+{
+  "calorias": 450,
+  "proteinas_g": 25,
+  "carbohidratos_g": 40,
+  "grasas_g": 15,
+  "ingredientes": "descripción breve de ingredientes principales",
+  "notas": "una observación nutricional relevante"
+}"""
+            },
+            {"role": "user", "content": f"Comida: {nombre} (tipo: {tipo})"}
+        ],
+        max_tokens=300
     )
     texto = respuesta.choices[0].message.content.strip()
     texto = texto.replace("```json", "").replace("```", "").strip()

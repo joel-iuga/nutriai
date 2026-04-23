@@ -7,6 +7,7 @@ from vistas.auth import mostrar_auth
 from vistas.perfil_detalle import mostrar_nueva_persona, mostrar_perfil
 from vistas.cuestionario import mostrar_cuestionario
 from vistas.resultado import mostrar_resultado
+from vistas.comidas_favoritas import mostrar_comidas_favoritas
 
 load_dotenv()
 
@@ -40,12 +41,26 @@ with st.sidebar:
         for p in personas:
             activo = (st.session_state.persona_activa and
                       st.session_state.persona_activa["id"] == p["id"])
-            if st.button(f"{'▶ ' if activo else ''}{p['nombre']}",
-                         key=f"sidebar_{p['id']}", use_container_width=True,
-                         type="primary" if activo else "secondary"):
+            if st.button(
+                f"{'▶ ' if activo else ''}{p['nombre']}",
+                key=f"sidebar_{p['id']}",
+                use_container_width=True,
+                type="primary" if activo else "secondary"
+            ):
                 st.session_state.persona_activa = p
                 st.session_state.vista = "perfil"
                 st.rerun()
+
+            # Botón de comidas favoritas solo bajo el perfil activo
+            if activo:
+                if st.button(
+                    "Comidas favoritas",
+                    key=f"fav_{p['id']}",
+                    use_container_width=True
+                ):
+                    st.session_state.vista = "comidas_favoritas"
+                    st.rerun()
+
     st.write("")
     if st.button("➕ Nuevo perfil", use_container_width=True):
         st.session_state.vista = "nueva_persona"
@@ -77,3 +92,6 @@ elif st.session_state.vista == "cuestionario":
 
 elif st.session_state.vista == "resultado":
     mostrar_resultado(user_id)
+
+elif st.session_state.vista == "comidas_favoritas":
+    mostrar_comidas_favoritas(user_id)

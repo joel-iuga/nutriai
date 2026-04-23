@@ -119,3 +119,59 @@ def eliminar_dieta(dieta_id: str, user_id: str) -> bool:
         return True
     except Exception as e:
         raise e
+
+def guardar_comida_favorita(user_id: str, persona_id: str, datos: dict) -> dict:
+    try:
+        client = get_client()
+        result = client.table("comidas_favoritas").insert({
+            "user_id": user_id,
+            "persona_id": persona_id,
+            "nombre": datos.get("nombre"),
+            "tipo": datos.get("tipo"),
+            "calorias": datos.get("calorias"),
+            "proteinas_g": datos.get("proteinas_g"),
+            "carbohidratos_g": datos.get("carbohidratos_g"),
+            "grasas_g": datos.get("grasas_g"),
+            "ingredientes": datos.get("ingredientes"),
+            "notas": datos.get("notas")
+        }).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        raise e
+
+def cargar_comidas_favoritas(persona_id: str, user_id: str) -> list:
+    try:
+        client = get_client()
+        result = client.table("comidas_favoritas")\
+            .select("*")\
+            .eq("persona_id", persona_id)\
+            .eq("user_id", user_id)\
+            .order("tipo")\
+            .execute()
+        return result.data
+    except Exception:
+        return []
+
+def eliminar_comida_favorita(comida_id: str, user_id: str) -> bool:
+    try:
+        client = get_client()
+        client.table("comidas_favoritas")\
+            .delete()\
+            .eq("id", comida_id)\
+            .eq("user_id", user_id)\
+            .execute()
+        return True
+    except Exception as e:
+        raise e
+
+def actualizar_comida_favorita(comida_id: str, user_id: str, datos: dict) -> bool:
+    try:
+        client = get_client()
+        client.table("comidas_favoritas")\
+            .update(datos)\
+            .eq("id", comida_id)\
+            .eq("user_id", user_id)\
+            .execute()
+        return True
+    except Exception as e:
+        raise e
