@@ -1,55 +1,77 @@
 from fpdf import FPDF
-import re
 import os
+import json
 
 FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "DejaVuSans.ttf")
 
-def limpiar_markdown(texto: str) -> str:
-    texto = re.sub(r"\*\*(.+?)\*\*", r"\1", texto)
-    texto = re.sub(r"\*(.+?)\*", r"\1", texto)
-    texto = re.sub(r"#{1,3} ", "", texto)
-    return texto.strip()
+def generar_pdf(nombre_usuario: str, contenido) -> bytes:
+    if isinstance(contenido, str):
+        try:
+            contenido = json.loads(contenido)
+        except Exception:
+            contenido = {"dias": [], "consejos": [], "advertencia": contenido}
 
-def generar_pdf(nombre_usuario: str, dieta_texto: str) -> bytes:
     pdf = FPDF(format="A4")
     pdf.add_page()
     pdf.set_margins(15, 15, 15)
     pdf.set_auto_page_break(auto=True, margin=15)
-
-    # Registrar fuente Unicode
     pdf.add_font("DejaVu", "", FONT_PATH)
     pdf.add_font("DejaVu", "B", FONT_PATH)
 
     # Cabecera
     pdf.set_font("DejaVu", "B", 18)
-    pdf.cell(0, 12, "NutriAI — Plan de alimentación", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 12, "NutriAI — Plan de alimentacion", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.set_font("DejaVu", "", 11)
-    pdf.cell(0, 8, f"Generado para: {nombre_usuario}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 8, f"Para: {nombre_usuario}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(4)
     pdf.set_draw_color(180, 180, 180)
     pdf.line(15, pdf.get_y(), 195, pdf.get_y())
     pdf.ln(5)
 
-    # Contenido
-    for linea in dieta_texto.split("\n"):
-        linea = limpiar_markdown(linea)
+    # Macros
+    calorias = contenido.get("calorias_diarias", "")
+    macros = contenido.get("macros", {})
+    if calorias:
+        pdf.set_font("DejaVu", "B", 12)
+        pdf.cell(0, 8, f"Calorias diarias: {calorias} kcal", new_x="LMARGIN", new_y="NEXT")
+    if macros:
+        pdf.set_font("DejaVu", "", 10)
+        pdf.multi_cell(0, 6,
+            f"Proteinas: {macros.get('proteinas_g','')}g  |  "
+            f"Carbohidratos: {macros.get('carbohidratos_g','')}g  |  "
+            f"Grasas: {macros.get('grasas_g','')}g")
+    pdf.ln(4)
 
-        if not linea:
-            pdf.ln(2)
-            continue
+    # Días
+    for dia in contenido.get("dias", []):
+        pdf.set_font("DejaVu", "B", 12)
+        pdf.set_fill_color(225, 245, 238)
+        pdf.cell(0, 9, f"  {dia.get('dia','')}  —  {dia.get('calorias','')} kcal",
+                 new_x="LMARGIN", new_y="NEXT", fill=True)
+        pdf.set_font("DejaVu", "", 10)
+        for label, key in [("Desayuno","desayuno"),("Almuerzo","almuerzo"),
+                            ("Cena","cena"),("Snack","snack")]:
+            if dia.get(key):
+                pdf.set_font("DejaVu", "B", 10)
+                pdf.cell(22, 6, f"{label}:")
+                pdf.set_font("DejaVu", "", 10)
+                pdf.multi_cell(0, 6, dia[key])
+        pdf.ln(3)
 
-        try:
-            if linea.startswith("# ") or linea.startswith("## "):
-                pdf.set_font("DejaVu", "B", 13)
-                pdf.multi_cell(0, 8, linea.lstrip("# "))
-                pdf.set_font("DejaVu", "", 10)
-            elif linea.startswith("- ") or linea.startswith("* "):
-                pdf.set_font("DejaVu", "", 10)
-                pdf.multi_cell(0, 6, "  • " + linea[2:])
-            else:
-                pdf.set_font("DejaVu", "", 10)
-                pdf.multi_cell(0, 6, linea)
-        except Exception:
-            continue
+    # Consejos
+    consejos = contenido.get("consejos", [])
+    if consejos:
+        pdf.set_font("DejaVu", "B", 12)
+        pdf.cell(0, 9, "Consejos personalizados", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("DejaVu", "", 10)
+        for i, c in enumerate(consejos, 1):
+            pdf.multi_cell(0, 6, f"{i}. {c}")
+        pdf.ln(3)
+
+    # Advertencia
+    advertencia = contenido.get("advertencia", "")
+    if advertencia:
+        pdf.set_font("DejaVu", "B", 10)
+        pdf.multi_cell(0, 6, f"Nota: {advertencia}")
 
     return bytes(pdf.output())
