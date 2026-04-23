@@ -1,6 +1,6 @@
 import streamlit as st
-from ia import evaluar_perfil_ia, generar_dieta, persona_a_prompt
-from base_datos import cargar_dietas
+from ia import evaluar_perfil_ia, generar_dieta
+from base_datos import cargar_dietas, cargar_comidas_favoritas
 
 def mostrar_cuestionario(user_id):
     persona = st.session_state.persona_activa
@@ -17,7 +17,7 @@ def mostrar_cuestionario(user_id):
             except Exception as e:
                 st.error(f"Error: {str(e)}")
 
-    elif st.session_state.preguntas_adicionales:
+    elif st.session_state.get("preguntas_adicionales"):
         st.info("Necesito un poco más de información:")
         with st.form("preguntas_extra"):
             respuestas_extra = {}
@@ -34,26 +34,21 @@ def mostrar_cuestionario(user_id):
                     st.session_state.preguntas_adicionales = []
                     st.rerun()
 
-else:
-        # Preguntar frecuencia de comidas favoritas
-        from base_datos import cargar_comidas_favoritas
+    else:
         comidas_fav = cargar_comidas_favoritas(persona["id"], user_id)
 
-        if comidas_fav and "frecuencia_favoritas" not in st.session_state:
+        if comidas_fav and st.session_state.get("frecuencia_favoritas") is None:
             st.subheader("¿Con qué frecuencia incluimos tus comidas favoritas?")
             st.write("")
-
             nombres = [c["nombre"] for c in comidas_fav]
             st.caption(f"Tienes {len(comidas_fav)} comidas favoritas: "
                        f"{', '.join(nombres[:5])}{'...' if len(nombres) > 5 else ''}")
             st.write("")
-
             frecuencia = st.select_slider(
                 "Veces por semana",
                 options=["1-2 veces", "3-4 veces", "Todos los días que sea posible"],
                 value="3-4 veces"
             )
-
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Continuar con esta frecuencia", type="primary",
@@ -70,13 +65,12 @@ else:
                 try:
                     persona_con_extras = dict(persona)
                     extras = [v for v in st.session_state.get(
-                        "respuestas_extra", {}).values() if v.strip()]
+                        "respuestas_extra", {}).values() if str(v).strip()]
                     if extras:
                         persona_con_extras["notas_adicionales"] = " | ".join(extras)
 
-                    # Añadir comidas favoritas al contexto
                     frecuencia = st.session_state.get("frecuencia_favoritas", "ninguna")
-                    if frecuencia != "ninguna" and comidas_fav:
+                    if frecuencia and frecuencia != "ninguna" and comidas_fav:
                         favoritas_texto = "\n".join([
                             f"- {c['nombre']} ({c['tipo']})"
                             + (f": {c['calorias']} kcal" if c.get('calorias') else "")
@@ -94,7 +88,6 @@ else:
                     dias = st.session_state.get("dias_dieta", 7)
                     dieta_json = generar_dieta(persona_con_extras, dias=dias,
                                                historial=historial)
-
                     st.session_state.dieta_activa = {
                         "contenido": dieta_json,
                         "dias": dias,
@@ -104,7 +97,7 @@ else:
                     st.session_state.vista = "resultado"
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Error generando la dieta: {str(e)}")
                     if st.button("Reintentar"):
                         st.session_state.evaluacion_hecha = False
                         st.rerun()
