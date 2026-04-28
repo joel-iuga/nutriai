@@ -96,35 +96,34 @@ personas = cargar_personas(user_id)
 
 # ── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
-
-    # Logo
+    # Logo opción B — texto izquierda, logo derecha
     logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
     if os.path.exists(logo_path):
         with open(logo_path, "rb") as f:
             logo_b64 = base64.b64encode(f.read()).decode()
         st.markdown(f"""
-        <div style="display:flex; align-items:center; gap:10px; padding:4px 0 8px 0;">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 0 8px 0;">
+            <span style="font-size:20px; font-weight:700; color:#0a5c42;">NutriAI</span>
             <img src="data:image/png;base64,{logo_b64}"
-                 style="width:42px; height:42px; border-radius:50%;">
-            <span style="font-size:20px; font-weight:700;
-                         color:#0a5c42; letter-spacing:-0.5px;">NutriAI</span>
+                 style="width:40px; height:40px; border-radius:50%;">
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
-        <div style="font-size:20px; font-weight:700; color:#0a5c42;
-                    padding:4px 0 8px 0;">🥗 NutriAI</div>
+        <div style="font-size:20px; font-weight:700; color:#0a5c42; padding:4px 0 8px 0;">
+            NutriAI 🥗
+        </div>
         """, unsafe_allow_html=True)
 
     st.divider()
 
-    # ── Estado 1: Sin perfil activo — lista de perfiles ───────────
+    # ── Estado 1: Sin perfil activo ───────────────────────────────
     if st.session_state.persona_activa is None:
         col_tit, col_add = st.columns([3, 1])
         with col_tit:
             st.markdown("<p style='font-size:11px; font-weight:600; "
-                        "letter-spacing:0.08em; opacity:0.6;'>MIS PERFILES</p>",
-                        unsafe_allow_html=True)
+                        "letter-spacing:0.08em; opacity:0.6; color:#0a5c42;'>"
+                        "MIS PERFILES</p>", unsafe_allow_html=True)
         with col_add:
             if st.button("＋", key="add_perfil", use_container_width=True):
                 st.session_state.vista = "nueva_persona"
@@ -137,11 +136,11 @@ with st.sidebar:
                 st.session_state.vista = "perfil"
                 st.rerun()
 
-        # Botones inferiores
-        st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
+        # Espaciador para empujar botones al fondo
+        st.markdown("<div style='flex:1; min-height:200px;'></div>",
+                    unsafe_allow_html=True)
         st.divider()
         if st.button("Comidas preferidas", use_container_width=True):
-            # Sin perfil activo — pedir seleccionar uno
             st.warning("Selecciona primero un perfil")
         if st.button("Ajustes", use_container_width=True):
             st.session_state.vista = "ajustes"
@@ -152,14 +151,12 @@ with st.sidebar:
                 del st.session_state[key]
             st.rerun()
 
-    # ── Estado 2: Con perfil activo — navegación del perfil ───────
+    # ── Estado 2: Con perfil activo ───────────────────────────────
     else:
         persona = st.session_state.persona_activa
         st.markdown(f"""
-        <p style='font-size:16px; font-weight:600;
-                  color:#0a5c42; padding: 2px 0 6px 0;'>
-            {persona['nombre']}
-        </p>
+        <p style='font-size:16px; font-weight:600; color:#0a5c42;
+                  padding:2px 0 6px 0;'>{persona['nombre']}</p>
         """, unsafe_allow_html=True)
         st.divider()
 
@@ -180,25 +177,29 @@ with st.sidebar:
             st.session_state.vista = "perfil"
             st.rerun()
 
+        # Espaciador
+        st.markdown("<div style='flex:1; min-height:150px;'></div>",
+                    unsafe_allow_html=True)
+
+        # Salir del perfil — separado arriba y abajo
         st.divider()
+        if st.button("← Salir del perfil", use_container_width=True):
+            st.session_state.persona_activa = None
+            st.session_state.vista = "perfiles"
+            st.rerun()
+        st.divider()
+
+        # Botones inferiores fijos
         if st.button("Comidas preferidas", use_container_width=True):
             st.session_state.vista = "comidas_favoritas"
             st.rerun()
-
         if st.button("Mi perfil", use_container_width=True):
             st.session_state.vista = "perfil"
             st.rerun()
-
         if st.button("Cerrar sesión", use_container_width=True):
             supabase.auth.sign_out()
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
-            st.rerun()
-
-        st.write("")
-        if st.button("← Salir del perfil", use_container_width=True):
-            st.session_state.persona_activa = None
-            st.session_state.vista = "perfiles"
             st.rerun()
 
 
